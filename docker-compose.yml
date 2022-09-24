@@ -1,0 +1,188 @@
+version: '3.8'
+
+services:
+  ######################################################################
+  # TRAEFIK
+  ######################################################################
+  traefik:
+    # Name des Containers
+    container_name: "${COMPOSE_PROJECT_NAME}_traefik"
+
+    # Traefik docker image
+    image: traefik:v2.8
+
+    command: 
+      # WebUI starten und auf Docker hören
+      - "--api.insecure=true" 
+      - "--providers.docker"
+      - "--providers.docker.exposedbydefault=false"
+
+      # Entrypoints definieren; dies sind die offenen Port-Tore nach außen.
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.address=:80"
+
+      # FÜR HTTP Challenge über 80
+      - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"  
+
+      # FÜR TLS Challenge über 443
+      # - "--certificatesresolvers.le.acme.email=${RESOLVER_EMAIL}"
+      # - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      # - "--certificatesresolvers.le.acme.tlschallenge=true"  
+
+      # HTTP zu HTTPS weiterleiten (geht nicht, wenn man Port 443 geschützt hat)
+      # - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      # - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+
+    ports:
+      # HTTP-Port
+      - "80:80"
+      # HTTPS-Port
+      - "443:443"
+      # Die Web UI (aktiviert durch --api.insecure=true)
+      - "8080:8080"
+    volumes:
+      # Traefik benötigt Zugriff auf Docker des Hosts
+      - ${DOCKER_SOCK}:/var/run/docker.sock
+      # Zertifikate in ein Volume speichern
+      - traefik-le-volume:/letsencrypt
+
+
+
+  ##########################################################
+  # GITLAB
+  ##########################################################
+  gitlab:
+    # Name des Containers
+    container_name: "${COMPOSE_PROJECT_NAME}_gitlab"
+
+    # Feste Version
+    image: 'gitlab/gitlab-ee:15.2.2-ee.0'
+
+    # Der Name von GitLab
+    hostname: "${GITLAB_HOSTNAME}"
+
+    # GitLab Einstellungen
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        # Externe URL festlegen
+        external_url 'https://${GITLAB_HOSTNAME}'
+
+        # Gitlab soll nur über HTTP zuhören
+        nginx['listen_https'] = false
+        nginx['listen_port'] = 80     
+        nginx['proxy_set_headers'] = {
+          "X-Forwarded-Proto" => "https",
+          "X-Forwarded-Ssl" => "on"
+        }           
+
+        # Probleme mit Traefik beheben
+        # https://gitlab.com/gitlab-org/omnibus-gitlab/-/issues/5560
+        registry_external_url 'https://${GITLAB_REGISTRY}'
+        gitlab_rails['registry_enabled'] = true
+        gitlab_rails['registry_api_url'] = 'https://${GITLAB_REGISTRY}'
+        registry['enable'] = true
+        registry_nginx['enable'] = false
+        registry['registry_http_addr'] = "0.0.0.0:5000"
+
+
+        # SSH Port anpassen
+        gitlab_shell_ssh_port=${GITLAB_SSH_PORT}
+
+        # Email-Einstellungen
+        gitlab_rails['smtp_enable'] = true
+        gitlab_rails['smtp_address'] = "${SMTP_ADDRESS}"
+        gitlab_rails['smtp_port'] = ${SMTP_PORT}
+        gitlab_rails['smtp_user_name'] = "${SMTP_USER_NAME}"
+        gitlab_rails['smtp_password'] = "${SMTP_PASSWORD}"
+        gitlab_rails['smtp_domain'] = "${SMTP_DOMAIN}"
+        gitlab_rails['smtp_authentication'] = "${SMTP_AUTHENTICATION}"
+        gitlab_rails['smtp_enable_starttls_auto'] = true
+        gitlab_rails['smtp_tls'] = false
+        gitlab_rails['gitlab_email_from'] = "${SMTP_EMAIL_FROM}"
+        gitlab_rails['gitlab_email_reply_to'] = "${SMTP_EMAIL_REPLYTO}"
+
+    labels:
+      # Traefik aktivieren
+      - "traefik.enable=true"
+
+      # GitLab-Domain konfigurieren
+      - "traefik.http.routers.gitlab.rule=Host(`${GITLAB_HOSTNAME}`)"
+      - "traefik.http.routers.gitlab.entrypoints=websecure"
+      - "traefik.http.routers.gitlab.tls=true"
+      - "traefik.http.routers.gitlab.tls.certresolver=le"
+      - "traefik.http.routers.gitlab.service=gitlab"
+      - "traefik.http.services.gitlab.loadbalancer.server.port=80"
+
+      # Registry-Domain konfigurieren
+      - "traefik.http.routers.gitlab-registry.rule=Host(`${GITLAB_REGISTRY}`)"
+      - "traefik.http.routers.gitlab-registry.entrypoints=websecure"
+      - "traefik.http.routers.gitlab-registry.tls=true"
+      - "traefik.http.routers.gitlab-registry.tls.certresolver=le"
+      - "traefik.http.routers.gitlab-registry.service=gitlab-registry"
+      - "traefik.http.services.gitlab-registry.loadbalancer.server.port=5000"
+
+    ports:
+      - '${GITLAB_SSH_PORT}:22'
+
+    volumes:
+      - 'gitlab-config-volume:/etc/gitlab'
+      - 'gitlab-logs-volume:/var/log/gitlab'
+      - 'gitlab-data-volume:/var/opt/gitlab'
+
+    depends_on:
+      - "traefik"
+
+  ##########################################################
+  # RUNNER
+  ##########################################################
+  runner:
+    # Name des Containers
+    container_name: "${COMPOSE_PROJECT_NAME}_runner"
+
+    # Hostname vom Runner
+    hostname: "${GITLAB_RUNNER_HOSTNAME}"
+
+    # Build-File
+    build:
+      context: ./runner
+
+    # Der Runner hat selbst Docker installiert
+    privileged: true
+
+    # Ein paar Volumes
+    volumes:
+      - gitlab-runner-volume:/etc/gitlab-runner
+      - gitlab-runner-docker-volume:/var/lib/docker
+
+    # Damit der Runner den Host erreichen kann
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    depends_on:
+      - "traefik"
+      - "gitlab"
+
+    # Runner muss in eigenem Netwerk laufen, denn sonst
+    # würde er die Registry IP intern auflösen und automatisch
+    # auf HTTPS gehen, welches nicht konfiguriert ist.
+    networks:
+      - runner
+
+# Volumes definieren
+volumes:
+  gitlab-config-volume:
+    name: ${GITLAB_CONFIG_VOLUME}
+  gitlab-logs-volume:
+    name: ${GITLAB_LOGS_VOLUME}
+  gitlab-data-volume:
+    name: ${GITLAB_DATA_VOLUME}
+  gitlab-runner-volume:
+    name: ${GITLAB_RUNNER_VOLUME}
+  gitlab-runner-docker-volume:
+    name: ${GITLAB_RUNNER_DOCKER_VOLUME}
+  traefik-le-volume:
+    name: ${LETSENCRYPT_VOLUME}
+
+
+networks:
+  runner: {}
