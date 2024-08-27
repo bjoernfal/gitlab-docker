@@ -56,7 +56,8 @@ services:
     container_name: "${COMPOSE_PROJECT_NAME}_gitlab"
 
     # Feste Version
-    image: 'gitlab/gitlab-ee:15.2.2-ee.0'
+    # Falls man updaten möchte, sollte man dem Upgrade Path folgen: https://gitlab-com.gitlab.io/support/toolbox/upgrade-path
+    image: gitlab/gitlab-ce:17.3.1-ce.0
 
     # Der Name von GitLab
     hostname: "${GITLAB_HOSTNAME}"
@@ -133,26 +134,27 @@ services:
       - "traefik"
 
   ##########################################################
-  # RUNNER
+  # EIGENER RUNNER
+  # Wird über ein Dockerfile erstellt
   ##########################################################
-  runner:
+  runner-custom:
     # Name des Containers
-    container_name: "${COMPOSE_PROJECT_NAME}_runner"
+    container_name: "${COMPOSE_PROJECT_NAME}_runner-custom"
 
     # Hostname vom Runner
-    hostname: "${GITLAB_RUNNER_HOSTNAME}"
+    hostname: "${GITLAB_RUNNER_CUSTOM_HOSTNAME}"
 
     # Build-File
     build:
-      context: ./runner
+      context: ./runner-custom
 
     # Der Runner hat selbst Docker installiert
     privileged: true
 
     # Ein paar Volumes
     volumes:
-      - gitlab-runner-volume:/etc/gitlab-runner
-      - gitlab-runner-docker-volume:/var/lib/docker
+      # Hier werden generelle Infos gespeichert, wie z.B. der Runner-Token
+      - gitlab-runner-custom-volume:/etc/gitlab-runner
 
     # Damit der Runner den Host erreichen kann
     extra_hosts:
@@ -168,6 +170,40 @@ services:
     networks:
       - runner
 
+  ##########################################################
+  # RUNNER DOCKER
+  # Führt Docker-in-Docker aus und ist damit sehr flexibel
+  ##########################################################
+  runner-docker:
+    # Name des Containers
+    container_name: "${COMPOSE_PROJECT_NAME}_runner-docker"
+
+    # Hostname vom Runner
+    hostname: "${GITLAB_RUNNER_DOCKER_HOSTNAME}"
+
+    # Ab hier nehmen wir einen Standard-Runner
+    # Dazu muss unten der Docker Socket angegeben werden
+    image: 'gitlab/gitlab-runner:alpine3.19'
+
+    # Der Runner hat selbst Docker installiert
+    privileged: true
+
+    volumes:
+      - gitlab-runner-docker-volume:/etc/gitlab-runner
+
+      # Docker Socket für docker builds
+      - ${DOCKER_SOCK}:/var/run/docker.sock
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Runner muss in eigenem Netwerk laufen, denn sonst
+    # würde er die Registry IP intern auflösen und automatisch
+    # auf HTTPS gehen, welches nicht konfiguriert ist.
+    networks:
+      - runner
+
+
 # Volumes definieren
 volumes:
   gitlab-config-volume:
@@ -176,10 +212,11 @@ volumes:
     name: ${GITLAB_LOGS_VOLUME}
   gitlab-data-volume:
     name: ${GITLAB_DATA_VOLUME}
-  gitlab-runner-volume:
-    name: ${GITLAB_RUNNER_VOLUME}
+  gitlab-runner-custom-volume:
+    name: ${GITLAB_RUNNER_CUSTOM_VOLUME}
   gitlab-runner-docker-volume:
     name: ${GITLAB_RUNNER_DOCKER_VOLUME}
+
   traefik-le-volume:
     name: ${LETSENCRYPT_VOLUME}
 
