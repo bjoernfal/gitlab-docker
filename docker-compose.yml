@@ -171,15 +171,15 @@ services:
       - runner
 
   ##########################################################
-  # RUNNER DOCKER
-  # Führt Docker-in-Docker aus und ist damit sehr flexibel
+  # RUNNER DEFAULT
+  # Kann Docker-in-Docker ausführen und ist damit sehr flexibel
   ##########################################################
-  runner-docker:
+  runner-default:
     # Name des Containers
-    container_name: "${COMPOSE_PROJECT_NAME}_runner-docker"
+    container_name: "${COMPOSE_PROJECT_NAME}_runner-default"
 
     # Hostname vom Runner
-    hostname: "${GITLAB_RUNNER_DOCKER_HOSTNAME}"
+    hostname: "${GITLAB_RUNNER_DEFAULT_HOSTNAME}"
 
     # Ab hier nehmen wir einen Standard-Runner
     # Dazu muss unten der Docker Socket angegeben werden
@@ -189,7 +189,7 @@ services:
     privileged: true
 
     volumes:
-      - gitlab-runner-docker-volume:/etc/gitlab-runner
+      - gitlab-runner-default-volume:/etc/gitlab-runner
 
       # Docker Socket für docker builds
       - ${DOCKER_SOCK}:/var/run/docker.sock
@@ -214,8 +214,8 @@ volumes:
     name: ${GITLAB_DATA_VOLUME}
   gitlab-runner-custom-volume:
     name: ${GITLAB_RUNNER_CUSTOM_VOLUME}
-  gitlab-runner-docker-volume:
-    name: ${GITLAB_RUNNER_DOCKER_VOLUME}
+  gitlab-runner-default-volume:
+    name: ${GITLAB_RUNNER_DEFAULT_VOLUME}
 
   traefik-le-volume:
     name: ${LETSENCRYPT_VOLUME}
